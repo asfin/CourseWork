@@ -53,38 +53,39 @@ __global__ void Iteration(vdata *devGraph, char *devVisited, vdata size, vdata *
 }
 
 
-int StartIteration(vdata *graph, char *visited, vdata size, vdata* result)
+int StartIteration(TGraph *self)
 {
 	int i = 0, offset = 1, vert, neig, numneig;
-	result[0] = 1;
-	result[1] = 0;
-	visited[0] = 1;
+
+	self->result[0] = 1;
+	self->result[1] = 0;
+	self->visited[0] = 1;
+
 	while (1)
 	{
-		vert = result[offset];
-		numneig = graph[graph[vert]];
+		vert = self->result[offset];
+		numneig = self->graph[self->graph[vert]];
 		//printf("%d ", vert);
 		for (int j = 1; j <= numneig; j++)
 		{
-			neig = graph[graph[vert]+j];
-			if (!visited[neig])
+			neig = self->graph[self->graph[vert]+j];
+			if (!self->visited[neig])
 			{
-				result[2+i++] = neig;
-				visited[neig]++;
+				self->result[2+i++] = neig;
+				self->visited[neig]++;
 			}
 		}
 		offset++;
-		//if (i+2 == offset) break;
-		if (!result[offset]) break;
+		if (!self->result[offset]) break;
 		/*
 		if (i > 1000) 
 		{
 			printf("iteration limit reached.\n");
 			break;
 		}*/
-		//if (i >= CPUITERATIONS*28) break;
+		//if (i >= CPUITERATIONS*BLOCKS*self->numdevices) break;
 	}
-	result[0] += i;
+	self->result[0] += i;
 
 	return 0;
 }
@@ -118,13 +119,14 @@ vdata* stdin_input()
 	return graph;
 }
 
-vdata* file_input(struct TGraph *self, char *in)
+vdata* file_input(TGraph *self, char *in)
 {
 	FILE *fp;
-	vdata len, num, offset, temp;
+	vdata len, num, offset, size;
 	vdata *graph, *devGraph;
-	
+
 	fp = fopen(in, "r");		
+
 	fscanf(fp, "%d %d", &self->size, &self->numarcs);
 	ERROR(cudaMallocHost((void **)&graph,
 						(2*self->size+self->numarcs)*sizeof(vdata),
@@ -132,22 +134,22 @@ vdata* file_input(struct TGraph *self, char *in)
 						cudaHostAllocMapped |
 						cudaHostAllocPortable
 						));
-	ERROR(cudaHostGetDevicePointer(&self->devGraph, graph, 0));
+	size = self->size;
 	offset = 0;
-	for (vdata i = 0; i < numvertex; i++)
+	for (vdata i = 0; i < size; i++)
 	{
 		fscanf(fp, "%d %d", &num, &len);
-		graph[i] = numvertex + offset;
-		graph[numvertex+offset] = len;
+		graph[i] = size + offset;
+		graph[size+offset] = len;
 		offset += 1;
 		for (vdata j = 1; j <= len; j++)
 		{
-			fscanf(fp, "%d", &temp);
-			graph[numvertex+offset] = temp;
+			fscanf(fp, "%d", &graph[size+offset]);
 			offset += 1;
 		}		
 	}
-	
+
+	self->graph = graph;
 	return graph;
 }
 

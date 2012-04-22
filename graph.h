@@ -1,4 +1,7 @@
+#include <vector>
+
 #define CPUITERATIONS 96
+#define BLOCKS 7
 typedef unsigned long vdata;
 
 struct TMemory
@@ -14,23 +17,23 @@ struct TDeviceSettings
 	vdata start;
 	vdata stop;
 	vdata *devGraph;
-	vdata *devVisited;
+	char *devVisited;
 	vdata *devResult;
 	vdata *result;
+	cudaStream_t stream;
 };
 
 struct TGraph
 {
 	int id;
 	vdata *graph;
-	vdata *devGraph;
 	vdata size;
 	vdata numarcs;
-	vdata *visited;
+	vdata *result;
+	char *visited;
 	int numdevices;
-	struct TMemory **memory;
-	struct TDeviceSettings **devices;
-	cudaStream_t **streams;
+	std::vector<TMemory> memory;
+	std::vector<TDeviceSettings> devices;
 };
 
 vdata* file_input(struct TGraph*, char*);
@@ -40,4 +43,4 @@ vdata GetVertexCount(struct TGraph*);
 vdata GetArcsCount(struct TGraph*);
 
 __global__ void Iteration(vdata*, char*, vdata, vdata*);
-int StartIteration(vdata*, char*, vdata, vdata*);
+int StartIteration(TGraph*);

@@ -1,5 +1,5 @@
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,79 +9,40 @@
 
 using namespace std;
 
-float Run_Kernel(vdata*, char*, vdata, vdata*);
-struct TMemory** InitMemory(struct TMemory **);
-struct TDeviceSettings** InitDeviceSettings(struct TGraph*);
-void PrintStat(struct TGraph *self);
-void ReleaseCards(struct TGraph *self);
-struct TGraph Create_Graph(char path[256], int id=0);
-
-__global__ void test(int *b, int i)
-{
-	int tid = blockIdx.x*blockDim.x+threadIdx.x;
-	b[i+tid] = 1;
-	for (int t = 0; t < 65535; t++){}
-}
+float	Run_Kernels(TGraph*);
+int		InitMemory(TGraph*);
+int		InitDeviceSettings(TGraph*);
+void	PrintStat(TGraph*);
+void	ReleaseCards(TGraph*);
+int		Create_Graph(TGraph*, char path[256], int id=0);
 
 int main(int argc, char* argv[])
 {
 	cout << "Graph traversal on GPU.\n\n";
 
 	vdata size, memgraph;
-	struct TGraph graph;
+	TGraph graph;
 	char open[256];
 
 	sprintf((char*)open, "C:\\graphs\\input%d.txt", 0);
 	//sprintf((char*)open, "\\\\FILE-SERVER\\raid_root\\graphs\\input%d.txt", 0);
-	graph = Create_Graph(open);
+	Create_Graph(&graph, open);
 	PrintStat(&graph);
-		
-	int *a, *deva;
-	cudaSetDevice(0);
-	ERROR(cudaMallocHost((void **)&a,
-						20*sizeof(int),
-						cudaHostAllocWriteCombined |
-						cudaHostAllocMapped |
-						cudaHostAllocPortable
-						));
-	cudaHostGetDevicePointer(&deva, a, 0);
-	for (int i = 0; i < graph.numdevices; i++)
-	{
-		cudaSetDevice(i);
-		test<<<2, 2, 0, *graph.streams[i] >>>(deva, i*5);
-	}
-	cudaDeviceSynchronize();
-	for (int i = 0; i < 10; i++)
-		printf("%d ", a[i]);
-
-	//ERROR(cudaMalloc((void **) &devGraph, (2*GetVertexCount()+GetArcsCount())*sizeof(vdata)));
 	
-	//ERROR(cudaMemcpy(devGraph, graph, (2*GetVertexCount()+GetArcsCount())*sizeof(vdata), cudaMemcpyHostToDevice));
-
-
+	StartIteration(&graph);
+	printf("%d from %d vertex travelled.\n", graph.result[0], graph.size);
+	//ERROR(cudaMemcpy(graph.sited, visited, memvisit, cudaMemcpyHostToDevice));
 	
-	//ERROR(cudaHostGetDevicePointer(&devVisited, visited, 0));
+	printf("Iterations completed in %.3fms\n", Run_Kernels(&graph));
 
-	//ERROR(cudaHostAlloc((void **) &result, memresult, cudaHostAllocWriteCombined|cudaHostAllocMapped));
-	//ERROR(cudaHostGetDevicePointer(&devResult, result, 0));
+	printf("%d from %d vertex travelled.\n", graph.result[0], graph.size);
 	
-	
-	/*
-	StartIteration(graph, visited, GetVertexCount(), result);
-	printf("%d from %d vertex travelled.\n", result[0], GetVertexCount());
-	ERROR(cudaMemcpy(devVisited, visited, memvisit, cudaMemcpyHostToDevice));
-	
-	printf("Iterations completed in %.3fms\n", Run_Kernel(devGraph, devVisited, GetVertexCount(), devResult));
-
-	printf("%d from %d vertex travelled.\n", result[0], GetVertexCount());
-	*/
 
 	ReleaseCards(&graph);
-	//scanf("%s", &open);
     return 0;
 }
 
-float Run_Kernel(vdata *devGraph, char *devVisited, vdata size, vdata* devResult)
+float Run_Kernels(TGraph *self)
 {
 	float timer;
 	cudaEvent_t start, stop;
@@ -95,9 +56,15 @@ float Run_Kernel(vdata *devGraph, char *devVisited, vdata size, vdata* devResult
 	HANDLE_ERROR(
 		cudaEventRecord(start, 0)
 		);
+	for (int i = 0; i < self->numdevices; i++)
+	{
+		self->devices[i];
+		cudaSetDevice(i);
+		Iteration<<<BLOCKS, CPUITERATIONS, 0, self->devices[i].stream>>>
+			(self->devices[i].devGraph, self->devices[i].devVisited, self->size, self->devices[i].devResult);
+	}
 
-	Iteration<<<1, CPUITERATIONS>>>(devGraph, devVisited, size, devResult);
-
+	cudaDeviceSynchronize();
 	HANDLE_ERROR(
 		cudaEventRecord(stop, 0)
 		);
@@ -111,128 +78,127 @@ float Run_Kernel(vdata *devGraph, char *devVisited, vdata size, vdata* devResult
 	return timer;
 }
 
-void PrintStat(struct TGraph *self)
+void PrintStat(TGraph *self)
 {
-	printf("\nsize of vdata : %d\n", sizeof(vdata));
-	printf("vertex in graph : %d\n",  self->size);
-	printf("arcs in graph   : %d\n\n", GetArcsCount(self));
-	printf("size of graph   : %3.3fMb\n", (float)self->memory[0]->memgraph/1048576);
-	printf("size of visited : %3.3fMb\n", (float)self->memory[0]->memvisit/1048576);
-	printf("size of result  : %3.3fMb\n", (float)self->memory[0]->memresult/1048576);
-	printf("Total allocated : %3.3fMb\n\n", (float)(self->memory[0]->memgraph+self->memory[0]->memvisit+self->memory[0]->memresult)/1048576);
+	printf("\nsize of vdata : %d\n",		sizeof(vdata));
+	printf("vertex in graph : %d\n",		self->size);
+	printf("arcs in graph   : %d\n\n",		GetArcsCount(self));
+	printf("size of graph   : %3.3fMb\n",	(float)self->memory[0].memgraph/1048576);
+	printf("size of visited : %3.3fMb\n",	(float)self->memory[0].memvisit/1048576);
+	printf("size of result  : %3.3fMb\n",	(float)self->memory[0].memresult/1048576);
+	printf("Total allocated : %3.3fMb\n\n",	(float)(self->memory[0].memgraph+self->memory[0].memvisit+self->memory[0].memresult)/1048576);
 }
 
-struct TMemory** InitMemory(struct TGraph *self)
+int InitMemory(TGraph *self)
 {
-	struct TMemory **mem;
+	self->memory.resize(self->numdevices+1);
 	vdata checkvis = 0, checkres = 0;
 
-	mem = (struct TMemory **) malloc((self->numdevices+1)*sizeof(struct TMemory*));
-	mem[0] = (struct TMemory *) malloc(sizeof(struct TMemory));
-	mem[0]->memgraph  = (GetArcsCount(self)+2*GetVertexCount(self))*sizeof(vdata);
-	mem[0]->memvisit  =  GetVertexCount(self)*sizeof(char);
-	mem[0]->memresult = (GetVertexCount(self)+1+self->numdevices)*sizeof(vdata);
+	self->memory[0].memgraph  = (GetArcsCount(self)+2*GetVertexCount(self))*sizeof(vdata);
+	self->memory[0].memvisit  =  GetVertexCount(self)*sizeof(char);
+	self->memory[0].memresult = (GetVertexCount(self)+1+self->numdevices)*sizeof(vdata);
 	
 	for (int i = 1; i < self->numdevices+1; i++)
 	{
-		mem[i] = (struct TMemory *) malloc(sizeof(struct TMemory));
-		mem[i]->memgraph  = mem[0]->memgraph;
-		mem[i]->memvisit  = (GetVertexCount(self)/self->numdevices)*sizeof(char);
-		mem[i]->memresult = GetVertexCount(self)*sizeof(vdata)/self->numdevices+sizeof(vdata);
+		self->memory[i].memgraph  = self->memory[0].memgraph;
+		self->memory[i].memvisit  = (GetVertexCount(self)/self->numdevices)*sizeof(char);
+		self->memory[i].memresult = GetVertexCount(self)*sizeof(vdata)/self->numdevices+sizeof(vdata);
 
-		checkvis += mem[i]->memvisit;
-		checkres += mem[i]->memresult;
+		checkvis += self->memory[i].memvisit;
+		checkres += self->memory[i].memresult;
 	}
-	mem[1]->memresult += mem[0]->memresult-checkres;
-	mem[1]->memvisit  += mem[0]->memvisit-checkvis;
+	self->memory[1].memresult += self->memory[0].memresult-checkres;
+	self->memory[1].memvisit  += self->memory[0].memvisit-checkvis;
 
-	return mem;
+	return 0;
 
 }
 
-struct TDeviceSettings** InitDeviceSettings(struct TGraph *self)
+int InitDeviceSettings(TGraph *self)
 {
 	cudaDeviceProp prop;
-	static struct TDeviceSettings **pdev;
 
-	pdev = (struct TDeviceSettings **) malloc(self->numdevices*sizeof(struct TDeviceSettings*));
-	pdev[0] = (struct TDeviceSettings *) malloc(sizeof(struct TDeviceSettings));
-	self->streams = (cudaStream_t **) malloc(sizeof(cudaStream_t *));
-	self->streams[0] = (cudaStream_t *) malloc(sizeof(cudaStream_t));
+	self->devices.resize(self->numdevices);
 
 	cudaSetDevice(0);
+	cudaSetDeviceFlags(cudaDeviceMapHost);
 	cudaGetDeviceProperties(&prop, 0);
-	cudaStreamCreate(self->streams[0]);
-	pdev[0]->DeviceID = 0;
-	pdev[0]->start    = 0;
-	pdev[0]->stop     = self->size/self->numdevices+self->size%self->numdevices;
-	ERROR(cudaHostAlloc((void **) &(pdev[0]->result),
-						self->memory[1]->memresult,
+	cudaStreamCreate(&(self->devices[0].stream));
+	self->devices[0].DeviceID = 0;
+	self->devices[0].start    = 0;
+	self->devices[0].stop     = self->size/self->numdevices+self->size%self->numdevices;
+	ERROR(cudaHostAlloc((void **) &(self->devices[0].result),
+						self->memory[1].memresult,
 						cudaHostAllocWriteCombined|cudaHostAllocMapped)
 						);
-	ERROR(cudaHostGetDevicePointer(&(pdev[0]->devResult), pdev[0]->result, 0));
-	pdev[0]->devGraph = self->devGraph;
+	ERROR(cudaHostGetDevicePointer(&(self->devices[0].devResult), self->devices[0].result, 0));
+	ERROR(cudaHostGetDevicePointer(&self->devices[0].devGraph, self->graph, 0));
 	
-	pdev[0]->name = (char*)malloc(256);
-	sprintf(pdev[0]->name, "%s", prop.name);
-	cudaSetDeviceFlags(cudaDeviceMapHost);
-	ERROR(cudaMalloc((void **) &(pdev[0]->devVisited), self->memory[1]->memvisit));
-	printf("%s binded.\n", pdev[0]->name);
+	self->devices[0].name = (char*)malloc(256);
+	sprintf(self->devices[0].name, "%s", prop.name);
+	
+	ERROR(cudaMalloc((void **) &(self->devices[0].devVisited), self->memory[1].memvisit));
+	printf("%s binded.\n", self->devices[0].name);
 
 	for (int i = 1; i < self->numdevices; i++)
 	{
 		cudaSetDevice(i);
 		cudaGetDeviceProperties(&prop, i);
 		cudaSetDeviceFlags(cudaDeviceMapHost);
-		pdev[i] = (struct TDeviceSettings *)malloc(sizeof(struct TDeviceSettings));
-		self->streams[i] = (cudaStream_t *) malloc(sizeof(cudaStream_t));
-		cudaStreamCreate(self->streams[i]);
-		pdev[i]->DeviceID = i;
-		pdev[i]->start    = pdev[i-1]->stop+1;
-		pdev[i]->stop     = pdev[i]->start+self->size/self->numdevices;
-		ERROR(cudaHostAlloc((void **) &(pdev[i]->result),
-						self->memory[i+1]->memresult,
+		cudaStreamCreate(&(self->devices[i].stream));
+		self->devices[i].DeviceID = i;
+		self->devices[i].start    = self->devices[i-1].stop+1;
+		self->devices[i].stop     = self->devices[i].start+self->size/self->numdevices;
+		ERROR(cudaHostAlloc((void **) &(self->devices[i].result),
+						self->memory[i+1].memresult,
 						cudaHostAllocWriteCombined|cudaHostAllocMapped)
 						);
-		ERROR(cudaHostGetDevicePointer(&(pdev[i]->devResult), pdev[i]->result, 0));
-		pdev[i]->name = (char*)malloc(256);
-		sprintf(pdev[i]->name, "%s", prop.name);
-		ERROR(cudaMalloc((void **) &(pdev[i]->devVisited), self->memory[i+1]->memvisit));
-		pdev[i]->devGraph = pdev[0]->devGraph;
-		printf("%s binded.\n", pdev[i]->name);
+		ERROR(cudaHostGetDevicePointer(&(self->devices[i].devResult), self->devices[i].result, 0));
+		self->devices[i].name = (char*)malloc(256);
+		sprintf(self->devices[i].name, "%s", prop.name);
+		ERROR(cudaMalloc((void **) &(self->devices[i].devVisited), self->memory[i+1].memvisit));
+		ERROR(cudaHostGetDevicePointer(&self->devices[i].devGraph, self->graph, 0));
+		printf("%s binded.\n", self->devices[i].name);
 	}
 
-	return pdev;
+	return 0;
 }
 
-struct TGraph Create_Graph(char path[256], int id)
+int Create_Graph(TGraph *self, char path[256], int id)
 {
-	struct TGraph self;
-	self.id = id;
-	//cudaSetDevice(0);
+	self->id = id;
+	cudaSetDevice(0);
 	printf("Opening %s\n", path);
-	self.graph = file_input(&self, path);
+	file_input(self, path);
 	printf("Graph loaded.\n\n");
 	
-	ERROR(cudaGetDeviceCount(&self.numdevices));
+	ERROR(cudaGetDeviceCount(&self->numdevices));
 
-	self.memory  = InitMemory(&self);
+	ERROR(cudaHostAlloc((void **) &self->result,
+						CPUITERATIONS*BLOCKS*self->numdevices+1,
+						cudaHostAllocWriteCombined|
+						cudaHostAllocMapped|
+						cudaHostAllocPortable
+						));
 
-	ERROR(cudaHostAlloc((void **) &self.visited, self.memory[0]->memvisit, cudaHostAllocWriteCombined|cudaHostAllocMapped));
+	InitMemory(self);
 
-	self.devices = InitDeviceSettings(&self);
+	ERROR(cudaHostAlloc((void **) &self->visited, self->memory[0].memvisit, cudaHostAllocWriteCombined|cudaHostAllocMapped));
 
-	return self;
+	InitDeviceSettings(self);
+
+	return 0;
 }
 
-void ReleaseCards(struct TGraph *self)
+void ReleaseCards(TGraph *self)
 {
+	cudaDeviceProp prop;
 	for (int i = 0; i < self->numdevices; i++)
 	{
 		cudaSetDevice(i);
-		ERROR(cudaFree(self->devices[i]->devVisited));
-		ERROR(cudaStreamDestroy(*(self->streams[i])));
+		cudaGetDeviceProperties(&prop, i);
+		ERROR(cudaStreamDestroy(self->devices[i].stream));
 		ERROR(cudaDeviceReset());
-		printf("%s released.\n", self->devices[i]->name);
+		printf("%s released.\n", prop.name);
 	}
 }
