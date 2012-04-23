@@ -2,13 +2,20 @@
 
 #define CPUITERATIONS 96
 #define BLOCKS 7
-typedef unsigned long vdata;
+#define SHAREDSIZE 31
+typedef unsigned int vdata;
 
 struct TMemory
 {
 	vdata memgraph;
 	vdata memvisit;
 	vdata memresult;
+};
+struct TDevice
+{
+	int DeviceID;
+	cudaDeviceProp prop;
+	cudaStream_t stream;
 };
 struct TDeviceSettings
 {
@@ -42,5 +49,5 @@ int check(vdata*, vdata);
 vdata GetVertexCount(struct TGraph*);
 vdata GetArcsCount(struct TGraph*);
 
-__global__ void Iteration(vdata*, char*, vdata, vdata*);
+__global__ void Iteration(vdata*, vdata*, char*, vdata, int);
 int StartIteration(TGraph*);

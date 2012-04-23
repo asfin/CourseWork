@@ -1,27 +1,60 @@
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
+#include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 #include "graph.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include "book.h"
 
-vdata numvertex = 0, numarcs = 0;
+__inline__ __device__ void expand(vdata *graph, vdata *result, vdata a[CPUITERATIONS][SHAREDSIZE], vdata offset , int block, int thread )
+{
+	vdata vert;
+	vdata neigOffset;
+	vdata numneig;
+	vdata i = 0;
 
-__device__ vdata expand(vdata *graph)
-{
-	return 0;
+	vert = result[offset];
+	neigOffset = graph[vert];
+	numneig = graph[neigOffset++];
+	a[thread][0] = 0;
+
+	while ((i < numneig)&&(i < SHAREDSIZE-1))
+	{
+		a[thread][++i] = graph[neigOffset];
+	}
+	a[thread][0] = i;
+	if (i < numneig) 
+		offset += block;
+	__syncthreads();
+
 }
-__global__ void Iteration(vdata *devGraph, char *devVisited, vdata size, vdata *devResult)
+
+__inline__ __device__ void compact(vdata a[CPUITERATIONS][SHAREDSIZE], char *visited, int thread)
 {
+	for (int i = 1; i < a[thread][0]; i++)
+	{
+		if (visited[a[thread][i]])
+			a[thread][i] = a[thread][a[thread][0]--];
+	}
+}
+__global__ void Iteration(vdata *graph, vdata *result, char *visited, vdata size, int ID)
+{
+	__shared__ vdata a[CPUITERATIONS][SHAREDSIZE];
 	vdata tid = blockIdx.x*blockDim.x + threadIdx.x;
 	vdata thread = threadIdx.x;
 	vdata block = gridDim.x*blockDim.x;
-	vdata offset, vert, numneig, neig, i;
-	__shared__ vdata a[CPUITERATIONS][31];
 
-	offset = tid+1;
+	vdata offset, vert, numneig, neig, i;
+
+	offset = ID*block+tid+1;
 	i = 0;
 
+	expand(graph, result, a, offset, block, thread);
+
+	compact(a, visited, thread);
+	atomicAdd(&result[0], a[thread][0]);
+	__syncthreads();
+
+/*
 	while (1)
 	{
 		vert = devResult[offset];
@@ -46,8 +79,8 @@ __global__ void Iteration(vdata *devGraph, char *devVisited, vdata size, vdata *
 		offset += block;
 		
 		if (!devResult[offset]) break;
-	}
-	__syncthreads();
+	}*/
+
 
 	
 }
@@ -83,7 +116,7 @@ int StartIteration(TGraph *self)
 			printf("iteration limit reached.\n");
 			break;
 		}*/
-		//if (i >= CPUITERATIONS*BLOCKS*self->numdevices) break;
+		if (i >= CPUITERATIONS*BLOCKS*self->numdevices) break;
 	}
 	self->result[0] += i;
 
@@ -92,7 +125,7 @@ int StartIteration(TGraph *self)
 
 vdata* stdin_input()
 	{
-	vdata len, num, offset, temp;
+	vdata len, num, offset, temp, numvertex, numarcs;
 	vdata *graph;
 
 	printf("Reading stdin.\n");

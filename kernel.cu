@@ -21,24 +21,51 @@ int main(int argc, char* argv[])
 	cout << "Graph traversal on GPU.\n\n";
 
 	vdata size, memgraph;
-	TGraph graph;
+	float time;
+	vector<TGraph> graph;
+	int total = 6, num = 0;
+	graph.resize(total-num);
 	char open[256];
 
-	sprintf((char*)open, "C:\\graphs\\input%d.txt", 0);
-	//sprintf((char*)open, "\\\\FILE-SERVER\\raid_root\\graphs\\input%d.txt", 0);
-	Create_Graph(&graph, open);
-	PrintStat(&graph);
-	
-	StartIteration(&graph);
-	printf("%d from %d vertex travelled.\n", graph.result[0], graph.size);
-	//ERROR(cudaMemcpy(graph.sited, visited, memvisit, cudaMemcpyHostToDevice));
-	
-	printf("Iterations completed in %.3fms\n", Run_Kernels(&graph));
+	while (num < total)
+	{
+		//sprintf((char*)open, "C:\\graphs\\input%d.txt", num);
+		sprintf((char*)open, "\\\\FILE-SERVER\\raid_root\\graphs\\input%d.txt", num+3);
+		Create_Graph(&graph[num], open);
+		PrintStat(&graph[num]);
+		StartIteration(&graph[num]);
+		num++;
+	}
+	num = 0;
+	while (num < total)
+	{
+		
+		printf("%d from %d vertex travelled.\n", graph[num].result[0], graph[num].size);
 
-	printf("%d from %d vertex travelled.\n", graph.result[0], graph.size);
+		if (graph[num].result[0] >= CPUITERATIONS*BLOCKS*graph[num].numdevices)
+		{
+			//time = Run_Kernels(&graph[num]);
+			//printf("Iterations completed in %.3fms\n", time);
+			for (int i = 0; i < graph[num].numdevices; i++)
+			{
+				cudaSetDevice(i);
+				ERROR(
+				cudaMemcpyAsync(graph[num].devices[i].devVisited, graph[num].visited, graph[num].memory[i+1].memvisit, cudaMemcpyHostToDevice, graph[0].devices[i].stream)
+				);
+				Iteration<<<BLOCKS, CPUITERATIONS, 0, graph[0].devices[i].stream>>>
+					(graph[num].devices[i].devGraph, graph[num].devices[i].devResult, graph[num].devices[i].devVisited, graph[num].size, graph[num].devices[i].DeviceID);
+			}
+		} else {
+			cout << "Insufficent vertex to run kernels.\n";
+		}
+
+		printf("%d from %d vertex travelled.\n", graph[num].result[0], graph[num].size);
 	
 
-	ReleaseCards(&graph);
+		
+		num++;
+	}
+	ReleaseCards(&graph[0]);
     return 0;
 }
 
@@ -53,17 +80,25 @@ float Run_Kernels(TGraph *self)
 	HANDLE_ERROR(
 		cudaEventCreate(&stop)
 		);
+	
+	for (int i = 0; i < self->numdevices; i++)
+	{
+		cudaSetDevice(i);
+		ERROR(
+		cudaMemcpyAsync(self->devices[i].devVisited, self->visited, self->memory[i+1].memvisit, cudaMemcpyHostToDevice, self->devices[i].stream)
+		);
+	}
 	HANDLE_ERROR(
 		cudaEventRecord(start, 0)
 		);
+	
 	for (int i = 0; i < self->numdevices; i++)
 	{
-		self->devices[i];
 		cudaSetDevice(i);
+		//cudaMemcpyAsync(self->devices[i].devResult+1, self->result+1+i* );
 		Iteration<<<BLOCKS, CPUITERATIONS, 0, self->devices[i].stream>>>
-			(self->devices[i].devGraph, self->devices[i].devVisited, self->size, self->devices[i].devResult);
+			(self->devices[i].devGraph, self->devices[i].devResult, self->devices[i].devVisited, self->size, self->devices[i].DeviceID);
 	}
-
 	cudaDeviceSynchronize();
 	HANDLE_ERROR(
 		cudaEventRecord(stop, 0)
@@ -101,14 +136,15 @@ int InitMemory(TGraph *self)
 	for (int i = 1; i < self->numdevices+1; i++)
 	{
 		self->memory[i].memgraph  = self->memory[0].memgraph;
-		self->memory[i].memvisit  = (GetVertexCount(self)/self->numdevices)*sizeof(char);
-		self->memory[i].memresult = GetVertexCount(self)*sizeof(vdata)/self->numdevices+sizeof(vdata);
+		self->memory[i].memvisit  = (GetVertexCount(self))*sizeof(char);
+		//self->memory[i].memresult = GetVertexCount(self)*sizeof(vdata)/self->numdevices+sizeof(vdata);
 
 		checkvis += self->memory[i].memvisit;
-		checkres += self->memory[i].memresult;
+		//checkres += self->memory[i].memresult;
 	}
-	self->memory[1].memresult += self->memory[0].memresult-checkres;
-	self->memory[1].memvisit  += self->memory[0].memvisit-checkvis;
+	//self->memory[1].memresult += self->memory[0].memresult-checkres;
+	//self->memory[1].memvisit  += self->memory[0].memvisit-checkvis;
+	self->memory[0].memvisit = checkvis;
 
 	return 0;
 
@@ -127,11 +163,12 @@ int InitDeviceSettings(TGraph *self)
 	self->devices[0].DeviceID = 0;
 	self->devices[0].start    = 0;
 	self->devices[0].stop     = self->size/self->numdevices+self->size%self->numdevices;
-	ERROR(cudaHostAlloc((void **) &(self->devices[0].result),
+	/*ERROR(cudaHostAlloc((void **) &(self->devices[0].result),
 						self->memory[1].memresult,
 						cudaHostAllocWriteCombined|cudaHostAllocMapped)
 						);
-	ERROR(cudaHostGetDevicePointer(&(self->devices[0].devResult), self->devices[0].result, 0));
+	ERROR(cudaHostGetDevicePointer(&(self->devices[0].devResult), self->devices[0].result, 0));*/
+	ERROR(cudaHostGetDevicePointer(&(self->devices[0].devResult), self->result, 0));
 	ERROR(cudaHostGetDevicePointer(&self->devices[0].devGraph, self->graph, 0));
 	
 	self->devices[0].name = (char*)malloc(256);
@@ -149,11 +186,12 @@ int InitDeviceSettings(TGraph *self)
 		self->devices[i].DeviceID = i;
 		self->devices[i].start    = self->devices[i-1].stop+1;
 		self->devices[i].stop     = self->devices[i].start+self->size/self->numdevices;
-		ERROR(cudaHostAlloc((void **) &(self->devices[i].result),
+		/*ERROR(cudaHostAlloc((void **) &(self->devices[i].result),
 						self->memory[i+1].memresult,
 						cudaHostAllocWriteCombined|cudaHostAllocMapped)
 						);
-		ERROR(cudaHostGetDevicePointer(&(self->devices[i].devResult), self->devices[i].result, 0));
+		ERROR(cudaHostGetDevicePointer(&(self->devices[i].devResult), self->devices[i].result, 0));*/
+		ERROR(cudaHostGetDevicePointer(&(self->devices[i].devResult), self->result, 0));
 		self->devices[i].name = (char*)malloc(256);
 		sprintf(self->devices[i].name, "%s", prop.name);
 		ERROR(cudaMalloc((void **) &(self->devices[i].devVisited), self->memory[i+1].memvisit));
@@ -174,16 +212,17 @@ int Create_Graph(TGraph *self, char path[256], int id)
 	
 	ERROR(cudaGetDeviceCount(&self->numdevices));
 
+	InitMemory(self);
+
 	ERROR(cudaHostAlloc((void **) &self->result,
-						CPUITERATIONS*BLOCKS*self->numdevices+1,
+						//CPUITERATIONS*BLOCKS*self->numdevices+1,
+						self->memory[0].memresult,
 						cudaHostAllocWriteCombined|
 						cudaHostAllocMapped|
 						cudaHostAllocPortable
 						));
 
-	InitMemory(self);
-
-	ERROR(cudaHostAlloc((void **) &self->visited, self->memory[0].memvisit, cudaHostAllocWriteCombined|cudaHostAllocMapped));
+	ERROR(cudaHostAlloc((void **) &(self->visited), self->memory[0].memvisit, cudaHostAllocWriteCombined|cudaHostAllocMapped));
 
 	InitDeviceSettings(self);
 
