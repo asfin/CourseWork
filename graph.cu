@@ -1,210 +1,186 @@
-#include <cuda_runtime.h>
-#include <device_launch_parameters.h>
 #include "graph.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include "book.h"
 
-__inline__ __device__ void expand(vdata *graph, vdata *result, vdata a[CPUITERATIONS][SHAREDSIZE], vdata offset , int block, int thread )
+using namespace std;
+
+extern int pref;
+extern int _RUNTHREADS;
+int AddKernels(TGraph *self, TDevices *devices)
 {
-	vdata vert;
-	vdata neigOffset;
-	vdata numneig;
-	vdata i = 0;
-
-	vert = result[offset];
-	neigOffset = graph[vert];
-	numneig = graph[neigOffset++];
-	a[thread][0] = 0;
-
-	while ((i < numneig)&&(i < SHAREDSIZE-1))
+	if (pref)
 	{
-		a[thread][++i] = graph[neigOffset];
+		FullIteration(self);
+		self->byCPU = self->result[0];
+		self->total = reduce_host(self->visited, self->size);
+		*self->reduced = self->total;
+		self->byGPU = 0;
+		self->overhead = self->result[0] - self->total;
 	}
-	a[thread][0] = i;
-	if (i < numneig) 
-		offset += block;
-	__syncthreads();
-
-}
-
-__inline__ __device__ void compact(vdata a[CPUITERATIONS][SHAREDSIZE], char *visited, int thread)
-{
-	for (int i = 1; i < a[thread][0]; i++)
+	else
 	{
-		if (visited[a[thread][i]])
-			a[thread][i] = a[thread][a[thread][0]--];
-	}
-}
-__global__ void Iteration(vdata *graph, vdata *result, char *visited, vdata size, int ID)
-{
-	__shared__ vdata a[CPUITERATIONS][SHAREDSIZE];
-	vdata tid = blockIdx.x*blockDim.x + threadIdx.x;
-	vdata thread = threadIdx.x;
-	vdata block = gridDim.x*blockDim.x;
+		StartIteration(self);
+		self->byCPU = self->result[0];
 
-	vdata offset, vert, numneig, neig, i;
-
-	offset = ID*block+tid+1;
-	i = 0;
-
-	expand(graph, result, a, offset, block, thread);
-
-	compact(a, visited, thread);
-	atomicAdd(&result[0], a[thread][0]);
-	__syncthreads();
-
-/*
-	while (1)
-	{
-		vert = devResult[offset];
-		numneig = devGraph[devGraph[vert]];
-		for (int j = 1; j <= numneig; j++)
+		if (self->byCPU >= NUMTHREADS*MAXBLOCKS)
 		{
-			neig = devGraph[devGraph[vert]+j];
-			if (!devVisited[neig] && (a[tid][0] < 50))
-			{
-				//atomicAdd(&devResult[0], 1);
-				a[thread][0]++;
-				a[thread][a[thread][0]] = neig;
-				//devResult[0]++;
-				//devResult[devResult[0]] = neig;
-				devVisited[neig]++;
-			}
-			if (a[thread][0] == 50)
-			{
-				break;
-			}
+			devices->AddGraphToQuery(self);
+		} else {
+			self->byGPU = 0;
+			self->total = reduce_host(self->visited, self->size);
+			*self->reduced = self->total;
+			cout << "Insufficent vertex to run kernels.\n";
+
 		}
-		offset += block;
-		
-		if (!devResult[offset]) break;
-	}*/
-
-
-	
-}
-
-
-int StartIteration(TGraph *self)
-{
-	int i = 0, offset = 1, vert, neig, numneig;
-
-	self->result[0] = 1;
-	self->result[1] = 0;
-	self->visited[0] = 1;
-
-	while (1)
-	{
-		vert = self->result[offset];
-		numneig = self->graph[self->graph[vert]];
-		//printf("%d ", vert);
-		for (int j = 1; j <= numneig; j++)
-		{
-			neig = self->graph[self->graph[vert]+j];
-			if (!self->visited[neig])
-			{
-				self->result[2+i++] = neig;
-				self->visited[neig]++;
-			}
-		}
-		offset++;
-		if (!self->result[offset]) break;
-		/*
-		if (i > 1000) 
-		{
-			printf("iteration limit reached.\n");
-			break;
-		}*/
-		if (i >= CPUITERATIONS*BLOCKS*self->numdevices) break;
 	}
-	self->result[0] += i;
 
 	return 0;
 }
 
-vdata* stdin_input()
-	{
-	vdata len, num, offset, temp, numvertex, numarcs;
-	vdata *graph;
+vdata GetReduce(TGraph *self)
+{
+	cudaSetDevice(self->device);
+	cudaDeviceSynchronize();
+	self->total = *self->reduced;
+	self->byGPU = self->total - self->byCPU;
+	self->overhead = self->result[0] - self->total;
+	printf("Befor : %d from %d vertex travelled.\n", self->byCPU, self->size);
+	printf("After : %d from %d vertex travelled.\n", self->total, self->size);
+	printf("By GPU: %d\n", self->byGPU);
+	printf("Overhead : %d vertex\n\n", self->overhead);
 
-	printf("Reading stdin.\n");
-		
-	scanf("%d %d", &numvertex, &numarcs);
-	HANDLE_ERROR(
-		cudaHostAlloc((void **)&graph, (2*numvertex+numarcs)*sizeof(vdata), cudaHostAllocWriteCombined|cudaHostAllocMapped)
-	);
-	offset = 0;
-	for (vdata i = 0; i < numvertex; i++)
-	{
-		scanf("%d %d", &num, &len);
-		graph[i] = numvertex + offset;
-		graph[numvertex+offset] = len;
-		offset += 1;
-		for (vdata j = 1; j <= len; j++)
+
+	return self->byGPU;
+}
+
+int TDevices::RunKernels()
+{
+	int i;
+		i = lastused++;
+		//i = 0;
+		lastused %= numdevices;
+			
+		cudaSetDevice(i);
+		vdata *devred, *buffer;
+		for (int j = 0; j < bounded; j++)
 		{
-			scanf("%d", &temp);
-			graph[numvertex+offset] = temp;
-			offset += 1;
-		}		
-	}
-	printf("Graph loaded.\n\n");
-	return graph;
-}
-
-vdata* file_input(TGraph *self, char *in)
-{
-	FILE *fp;
-	vdata len, num, offset, size;
-	vdata *graph, *devGraph;
-
-	fp = fopen(in, "r");		
-
-	fscanf(fp, "%d %d", &self->size, &self->numarcs);
-	ERROR(cudaMallocHost((void **)&graph,
-						(2*self->size+self->numarcs)*sizeof(vdata),
-						cudaHostAllocWriteCombined |
-						cudaHostAllocMapped |
-						cudaHostAllocPortable
-						));
-	size = self->size;
-	offset = 0;
-	for (vdata i = 0; i < size; i++)
-	{
-		fscanf(fp, "%d %d", &num, &len);
-		graph[i] = size + offset;
-		graph[size+offset] = len;
-		offset += 1;
-		for (vdata j = 1; j <= len; j++)
+			if (boundedGraphs[j]->memOnGPU)
+			{
+				ERROR(cudaMalloc((void **) &boundedGraphs[j]->devGraph, boundedGraphs[j]->memory.memgraph));
+				ERROR(cudaMalloc((void **) &boundedGraphs[j]->devResult, boundedGraphs[j]->memory.memresult));
+				ERROR(cudaMalloc((void **) &boundedGraphs[j]->devVisited, boundedGraphs[j]->memory.memvisit));
+				ERROR(cudaMemcpyAsync(boundedGraphs[j]->devGraph, boundedGraphs[j]->graph, boundedGraphs[j]->memory.memgraph, cudaMemcpyHostToDevice, devices[i].streams[j]));
+				ERROR(cudaMemcpyAsync(boundedGraphs[j]->devResult, boundedGraphs[j]->result, boundedGraphs[j]->memory.memresult, cudaMemcpyHostToDevice, devices[i].streams[j]));
+				//ERROR(cudaMemsetAsync(boundedGraphs[j]->devVisited, 0, boundedGraphs[j]->memory.memvisit, devices[i].streams[j]));
+				//ERROR(cudaMemcpyAsync(boundedGraphs[j]->devVisited, boundedGraphs[j]->visited, boundedGraphs[j]->memory.memvisit, cudaMemcpyHostToDevice, devices[i].streams[j]));
+			} else {
+				cout << boundedGraphs[j]->graph << endl;
+				ERROR(cudaHostGetDevicePointer(&boundedGraphs[j]->devGraph,   boundedGraphs[j]->graph,   0));
+				ERROR(cudaHostGetDevicePointer(&boundedGraphs[j]->devResult,  boundedGraphs[j]->result,  0));
+				ERROR(cudaHostGetDevicePointer(&boundedGraphs[j]->devVisited, boundedGraphs[j]->visited, 0));
+			}
+			ERROR(cudaMalloc((void**)&boundedGraphs[j]->flag, sizeof(char)));
+			ERROR(cudaMalloc((void**)&boundedGraphs[j]->lock, sizeof(int)));
+			ERROR(cudaMalloc((void**)&boundedGraphs[j]->start, sizeof(vdata)));
+			ERROR(cudaHostGetDevicePointer(&boundedGraphs[j]->devReduced,   boundedGraphs[j]->reduced,   0));
+			boundedGraphs[j]->device = i;
+			
+		}
+		for (int j = 0; j < bounded; j++)
 		{
-			fscanf(fp, "%d", &graph[size+offset]);
-			offset += 1;
-		}		
-	}
-
-	self->graph = graph;
-	return graph;
+			InitMem<<<1, 1, 0, devices[i].streams[j]>>>(boundedGraphs[j]->start, boundedGraphs[j]->lock, boundedGraphs[j]->devVisited, boundedGraphs[j]->memory.memvisit);
+		}
+		for (int j = 0; j < bounded; j++)
+		{
+				Iteration_cc20<<<MAXBLOCKS, NUMTHREADS, 0, devices[i].streams[j]>>>
+						(boundedGraphs[j]->devGraph, boundedGraphs[j]->devResult, boundedGraphs[j]->devVisited, boundedGraphs[j]->start, buffer, boundedGraphs[j]->lock, boundedGraphs[j]->flag);
+		}
+		for (int j = 0; j < bounded; j++)
+		{
+			reduce_ccAny<<<1, 512, 0, devices[i].streams[j]>>>(boundedGraphs[j]->devVisited, boundedGraphs[j]->size, boundedGraphs[j]->devReduced);
+		}
+			//*/
+		for (int j = 0; j < bounded; j++)
+		{
+			if (boundedGraphs[j]->memOnGPU)
+			{
+				//cudaMemcpy(self->graph, self->devGraph, self->memory.memgraph, cudaMemcpyDeviceToHost);
+				cudaMemcpyAsync(boundedGraphs[j]->result, boundedGraphs[j]->devResult, boundedGraphs[j]->memory.memresult, cudaMemcpyDeviceToHost, devices[i].streams[j]);
+				cudaMemcpyAsync(boundedGraphs[j]->visited, boundedGraphs[j]->devVisited, boundedGraphs[j]->memory.memvisit, cudaMemcpyDeviceToHost, devices[i].streams[j]);
+				cudaFreeAsync(boundedGraphs[j]->devGraph);
+				cudaFreeAsync(boundedGraphs[j]->devResult);
+				cudaFreeAsync(boundedGraphs[j]->devVisited);
+			}
+			cudaFreeAsync(boundedGraphs[j]->flag);
+			cudaFreeAsync(boundedGraphs[j]->lock);
+			cudaFreeAsync(boundedGraphs[j]->start);
+		}
+	bounded = 0;
+	return 0;
 }
 
-vdata GetVertexCount(struct TGraph *self)
+int TDevices::TransferDataToDevice()
 {
-	return self->size;
+	return 0;
 }
 
-vdata GetArcsCount(struct TGraph *self)
+int TDevices::TransferDataFromDevice()
 {
-	return self->numarcs;
+	return 0;
 }
 
-int check(vdata *graph, vdata size)
+int TDevices::AddGraphToQuery(TGraph *self)
 {
-	vdata t = 0;
-	for (vdata ti = 0; ti < size; ti++)
+	boundedGraphs[bounded] = self;
+	bounded++;
+	if (bounded == maxstreams) RunKernels();
+	return 0;
+}
+
+TDevices::TDevices()
+{
+	lastused = 0;
+	bounded = 0;
+	maxstreams = 4;
+	ERROR(cudaGetDeviceCount(&numdevices));
+	devices.resize(numdevices);
+	boundedGraphs.resize(16);
+	for (int i = 0; i < numdevices; i++)
 	{
-		t += graph[graph[ti]];
+		cudaSetDevice(i);
+		devices[i].streams.resize(maxstreams);
+		devices[i].DeviceID = i;
+		devices[i].laststream = 0;
+		cudaGetDeviceProperties(&devices[i].prop, i);
+		cudaSetDeviceFlags(cudaDeviceMapHost);
+		for (int j = 0; j < maxstreams; j++)
+			cudaStreamCreate(&devices[i].streams[j]);
+		printf("%s binded.\n", devices[i].prop.name);
 	}
-	if (t == size)
-		return 1;
-	else
-		return 0;
+	printf("\n");
+}
+
+TDevices::~TDevices()
+{
+	printf("\n");
+	for (int i = 0; i < numdevices; i++)
+	{
+		cudaSetDevice(i);
+		ERROR(cudaDeviceReset());
+		printf("%s released.\n", devices[i].prop.name);
+	}
+}
+
+int TDevices::cudaFreeAsync(void *devptr)
+{
+	devPtrs.push_back(devptr);
+	return 0;
+}
+
+int TDevices::Clean()
+{
+	for (int i = 0; i < devPtrs.size(); i++)
+	{
+		cudaFree(devPtrs.back());
+		devPtrs.pop_back();
+	}
+	return 0;
 }
